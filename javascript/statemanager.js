@@ -3126,7 +3126,17 @@
                 Promise.reject(response);
                 return;
             }
-            sm.applyComponentSettings(values);
+            // Apply Forge Neo's preset first so its change handler can load
+            // the preset-specific model/module defaults before the saved
+            // values are applied.
+            const orderedValues = {};
+            const preferredOrder = ['forge_preset', 'sd_model_checkpoint', 'forge_additional_modules', 'forge_unet_storage_dtype'];
+            for (const settingName of [...preferredOrder, ...Object.keys(values)]) {
+                if (values.hasOwnProperty(settingName) && !orderedValues.hasOwnProperty(settingName)) {
+                    orderedValues[settingName] = values[settingName];
+                }
+            }
+            sm.applyComponentSettings(orderedValues);
         })
             .catch(e => sm.utils.logResponseError("[State Manager] Applying quicksettings failed with error", e));
     };
@@ -3383,7 +3393,8 @@
             'txt2img/Hires CFG Scale': ['txt2img/Hires CFG scale'],
             'txt2img/Hires Distilled CFG Scale': ['txt2img/Hires Distilled CFG scale'],
             'img2img/Hires CFG Scale': ['img2img/Hires CFG scale'],
-            'img2img/Hires Distilled CFG Scale': ['img2img/Hires Distilled CFG scale']
+            'img2img/Hires Distilled CFG Scale': ['img2img/Hires Distilled CFG scale'],
+            'forge_additional_modules': ['sd_modules']
         };
         for (const alias of (explicitAliases[basePath] || [])) {
             appendCandidate(alias);
@@ -3401,9 +3412,13 @@
         }
         return basePath;
     };
-    sm.findElementBySelectorOrFallback = function (settingPath) {
+    sm.isDomFallbackEntry = function (entry) {
+        return entry?.source == 'ui-config' || entry?.source == 'forge-neo-selector';
+    };
+    sm.findElementBySelectorOrFallback = function (settingPath, selectorOverride) {
         // Priority 1: Check explicit Forge Neo selector map
-        const selector = sm.forgeNeoSelectorMap?.[settingPath];
+        const selectorPath = settingPath.endsWith('/value') ? settingPath : `${settingPath}/value`;
+        const selector = selectorOverride || sm.forgeNeoSelectorMap?.[settingPath] || sm.forgeNeoSelectorMap?.[selectorPath];
         if (selector) {
             const element = document.querySelector(selector);
             if (element) {
@@ -3452,8 +3467,8 @@
         if (!entry) {
             return undefined;
         }
-        if (entry.source == 'ui-config') {
-            const element = sm.findElementBySelectorOrFallback(entry.path);
+        if (sm.isDomFallbackEntry(entry)) {
+            const element = sm.findElementBySelectorOrFallback(entry.path, entry.selector);
             if (!element) {
                 return undefined;
             }
@@ -3516,8 +3531,8 @@
         if (!entry) {
             return;
         }
-        if (entry.source == 'ui-config') {
-            const element = sm.findElementBySelectorOrFallback(entry.path);
+        if (sm.isDomFallbackEntry(entry)) {
+            const element = sm.findElementBySelectorOrFallback(entry.path, entry.selector);
             if (!element) {
                 console.warn(`[State Manager] Could not find element for ${entry.path} (tried explicit selector and ui-config fallback)`);
                 return;
@@ -3582,17 +3597,19 @@
                 const responseData = response[path];
                 const source = (typeof responseData === 'object' && responseData) ? `${responseData.source ?? 'gradio'}` : 'gradio';
                 const componentId = (typeof responseData === 'object' && responseData) ? responseData.id : responseData;
+                const selector = (typeof responseData === 'object' && responseData) ? responseData.selector : undefined;
                 const pathParts = path.split('/');
                 if (pathParts[pathParts.length - 1] != 'value') {
                     continue; // Skip other settings like min/max if they sneak in here
                 }
                 const basePath = pathParts.slice(0, pathParts.length - 1).join('/');
-                if (source == 'ui-config') {
+                if (source == 'ui-config' || source == 'forge-neo-selector') {
                     if (!sm.componentMap.hasOwnProperty(basePath)) {
                         sm.componentMap[basePath] = {
                             entries: [{
-                                    source: 'ui-config',
-                                    path: basePath
+                                    source: source,
+                                    path: basePath,
+                                    selector: selector
                                 }]
                         };
                     }
@@ -4006,8 +4023,19 @@
     };
     sm.getComponentSettings = function (type, changedOnly = true) {
         let settings = {};
+        const defaultContents = sm.memoryStorage.currentDefault.contents || {};
+        const componentPaths = new Set(Object.keys(defaultContents));
+        // Compatibility entries can be absent from ui-config.json entirely.
+        // Include them so a DOM-only Forge Neo control is saved even when it
+        // has no default value to compare against.
+        for (const componentPath of Object.keys(sm.componentMap)) {
+            const componentData = sm.componentMap[componentPath];
+            if (componentData.entries.some(entry => entry.source == 'forge-neo-selector')) {
+                componentPaths.add(componentPath);
+            }
+        }
         // let noComponentFoundSettings: string[] = [];
-        for (const componentPath of Object.keys(sm.memoryStorage.currentDefault.contents)) {
+        for (const componentPath of componentPaths) {
             const resolvedComponentPath = sm.resolveComponentPath(componentPath);
             const componentData = sm.componentMap[resolvedComponentPath];
             if (!componentData) {
@@ -4019,7 +4047,7 @@
                 for (let i = 0; i < componentData.entries.length; i++) {
                     const finalComponentPath = componentData.entries.length == 1 ? componentPath : `${componentPath}/${i}`;
                     const currentValue = sm.getMappedComponentEntryValue(componentData.entries[i]);
-                    if (!changedOnly || (sm.memoryStorage.currentDefault.contents[finalComponentPath] != currentValue)) {
+                    if (!changedOnly || !defaultContents.hasOwnProperty(finalComponentPath) || defaultContents[finalComponentPath] != currentValue) {
                         settings[finalComponentPath] = currentValue;
                     }
                 }

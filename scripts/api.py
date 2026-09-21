@@ -92,6 +92,31 @@ def get_quick_settings_names():
 
     return set()
 
+
+def _forge_module_names_for_ui(value):
+    """Return Forge Neo's VAE/Text Encoder selection in the UI format."""
+    if not isinstance(value, (list, tuple, set)):
+        return value
+    return [path.basename(str(module)) for module in value]
+
+
+def _forge_module_paths(value):
+    """Resolve saved UI names back to Forge Neo's internal module paths."""
+    if not isinstance(value, (list, tuple, set)):
+        return value
+    try:
+        from modules_forge import main_entry
+        known_modules = getattr(main_entry, "module_list", {}) or {}
+    except Exception:
+        known_modules = {}
+
+    resolved = []
+    for module in value:
+        module_name = path.basename(str(module))
+        resolved.append(known_modules.get(module_name, module))
+    return resolved
+
+
 def state_manager_api(blocks: gr.Blocks, app: FastAPI):
     """
     Register State Manager API endpoints.
@@ -139,6 +164,25 @@ def state_manager_api(blocks: gr.Blocks, app: FastAPI):
                     }
         except Exception as e:
             print(f"[StateManager] WARNING: Failed to load ui-config fallback keys: {e}")
+
+        # Forge Neo has a small set of visible controls that are created
+        # outside UiLoadsave, so their paths are absent from both the Gradio
+        # component mapping and, in some versions, ui-config.json. Promote
+        # every entry in the compatibility map to a synthetic component id.
+        # Existing Gradio mappings always win; a ui-config entry may receive
+        # the selector as an additional hint without changing its source.
+        for setting_path, selector in FORGE_NEO_SELECTORS.items():
+            if not setting_path.endswith("/value"):
+                continue
+            existing = component_ids.get(setting_path)
+            if existing is None:
+                component_ids[setting_path] = {
+                    "id": None,
+                    "source": "forge-neo-selector",
+                    "selector": selector,
+                }
+            elif isinstance(existing, dict) and existing.get("source") != "gradio":
+                existing.setdefault("selector", selector)
 
         # Log summary
         gradio_count = sum(1 for v in component_ids.values() if v['source'] == 'gradio')
@@ -201,9 +245,28 @@ def state_manager_api(blocks: gr.Blocks, app: FastAPI):
     @app.get("/statemanager/quicksettings")
     async def get_quick_settings():
         # Model, VAE, CLIP and hypernetwork are such important and commonly changed settings, I feel they belong here no matter what
-        quick_settings_names = set(['sd_model_checkpoint', 'sd_vae', 'sd_hypernetwork', 'CLIP_stop_at_last_layers']).union(get_quick_settings_names())
+        quick_settings_names = set([
+            'sd_model_checkpoint',
+            'sd_vae',
+            'sd_hypernetwork',
+            'CLIP_stop_at_last_layers',
+            # Forge Neo's visible model manager is backed by these options.
+            # Include them in the same quick-settings payload so presets and
+            # the multi-select VAE/Text Encoder choice restore together.
+            'forge_preset',
+            'forge_additional_modules',
+            'forge_unet_storage_dtype',
+        ]).union(get_quick_settings_names())
         
-        return {"settings": {s: getattr(shared.opts, s) for s in quick_settings_names if hasattr(shared.opts, s)}}
+        settings = {}
+        for setting_name in quick_settings_names:
+            if not hasattr(shared.opts, setting_name):
+                continue
+            value = getattr(shared.opts, setting_name)
+            if setting_name == 'forge_additional_modules':
+                value = _forge_module_names_for_ui(value)
+            settings[setting_name] = value
+        return {"settings": settings}
     
     @app.post("/statemanager/quicksettings")
     async def set_quick_settings(settings_json: ContentsDataModel):
@@ -211,6 +274,8 @@ def state_manager_api(blocks: gr.Blocks, app: FastAPI):
 
         for name, value in settings.items():
             if hasattr(shared.opts, name):
+                if name == 'forge_additional_modules':
+                    value = _forge_module_paths(value)
                 print(f'setting shared.opts.{name} to {value}')
                 setattr(shared.opts, name, value)
         
