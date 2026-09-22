@@ -2790,6 +2790,9 @@
                 'sd_vae': 'VAE',
                 'CLIP_stop_at_last_layers': 'CLIP skip',
                 'sd_hypernetwork': 'Hypernetwork',
+                'forge_preset': 'UI Preset',
+                'forge_additional_modules': 'VAE / Text Encoder',
+                'forge_unet_storage_dtype': 'Diffusion in Low Bits',
             };
             addSummaryDiffs((currentState.quickSettings && typeof currentState.quickSettings === 'object') ? currentState.quickSettings : {}, entry.data.quickSettings && typeof entry.data.quickSettings === 'object' ? entry.data.quickSettings : {}, (settingPath) => quickSettingLabelRenames[settingPath] || sm.getSettingLabelFromPath(settingPath));
             addSummaryDiffs((currentState.componentSettings && typeof currentState.componentSettings === 'object') ? currentState.componentSettings : {}, (entry.data.componentSettings && typeof entry.data.componentSettings === 'object') ? entry.data.componentSettings : {}, (settingPath) => sm.getSettingLabelFromPath(settingPath));
@@ -2809,6 +2812,9 @@
             'sd_vae': 'VAE',
             'CLIP_stop_at_last_layers': 'CLIP skip',
             'sd_hypernetwork': 'Hypernetwork',
+            'forge_preset': 'UI Preset',
+            'forge_additional_modules': 'VAE / Text Encoder',
+            'forge_unet_storage_dtype': 'Diffusion in Low Bits',
         };
         const entryQuickSettings = (entry.data.quickSettings && typeof entry.data.quickSettings === 'object') ? entry.data.quickSettings : {};
         const entryComponentSettings = (entry.data.componentSettings && typeof entry.data.componentSettings === 'object') ? entry.data.componentSettings : {};
@@ -2820,8 +2826,12 @@
                 const useButton = quickSettingParameter.querySelector('.sd-webui-sm-use-button');
                 useButton?.remove?.();
             }
-            if (sm.componentMap.hasOwnProperty(settingPath)) {
-                quickSettingParameter.dataset['valueDiff'] = (sm.componentMap[settingPath].entries[0].component.instance.$$.ctx[0] == entryQuickSettings[settingPath] ? 'same' : 'changed');
+            const resolvedSettingPath = sm.resolveComponentPath(settingPath);
+            const componentData = sm.componentMap[resolvedSettingPath];
+            const componentEntry = componentData?.entries?.[0];
+            if (componentEntry) {
+                const currentValue = sm.getMappedComponentEntryValue(componentEntry);
+                quickSettingParameter.dataset['valueDiff'] = sm.utils.areLooselyEqualValue(currentValue, entryQuickSettings[settingPath]) ? 'same' : 'changed';
             }
             else {
                 quickSettingParameter.dataset['valueDiff'] = 'missing';
