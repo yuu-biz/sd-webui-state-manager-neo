@@ -31,5 +31,17 @@ FORGE_NEO_SELECTORS = {
     # exposed through shared.opts, but these selectors keep the visible UI in
     # sync when a saved config is restored.
     "forge_preset/value":                 "#forge_ui_preset input",
+    "sd_model_checkpoint/value":          "#setting_sd_model_checkpoint input",
+    "forge_additional_modules/value":     "#setting_sd_modules input",
     "forge_unet_storage_dtype/value":     "#forge_ui_dtype input",
 }
+
+# These options have Forge Neo Gradio callbacks attached to their visible
+# components. They must be changed through those components so checkpoint and
+# module loading runs instead of only updating shared.opts.
+FORGE_NEO_CALLBACK_SETTINGS = frozenset({
+    "forge_preset",
+    "sd_model_checkpoint",
+    "forge_additional_modules",
+    "forge_unet_storage_dtype",
+})

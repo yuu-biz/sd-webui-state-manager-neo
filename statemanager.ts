@@ -3168,16 +3168,22 @@ declare let onAfterUiUpdate: (callback) => void;
         return selectors;
     };
     sm.getForgeNeoPresetValue = function () {
-        const presetSelector = sm.getForgeNeoSelectorForSetting('forge_preset');
-        if (presetSelector) {
-            const element = document.querySelector(presetSelector);
-            if (element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) {
-                return element.value;
-            }
-        }
         const presetPath = sm.resolveComponentPath('forge_preset');
         const presetEntry = sm.componentMap[presetPath]?.entries?.[0];
-        return sm.getMappedComponentEntryValue(presetEntry);
+        const componentValue = presetEntry?.component?.props?.value;
+        if (componentValue !== undefined) {
+            return componentValue;
+        }
+        const instanceContextValue = presetEntry?.component?.instance?.$$?.ctx?.[0];
+        if (instanceContextValue !== undefined) {
+            return instanceContextValue;
+        }
+        const presetSelector = sm.getForgeNeoSelectorForSetting('forge_preset');
+        const element = presetSelector ? document.querySelector(presetSelector) : null;
+        if (element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) {
+            return element.value;
+        }
+        return undefined;
     };
     sm.isForgeNeoPresetChange = function (quickSettings) {
         if (!quickSettings || !quickSettings.hasOwnProperty('forge_preset')) {
@@ -3199,9 +3205,9 @@ declare let onAfterUiUpdate: (callback) => void;
             const timeoutMs = 8000;
             const startedAt = Date.now();
             const check = () => {
-                const presetElement = document.querySelector(presetSelector);
-                const presetReady = Boolean(presetElement && (presetElement instanceof HTMLInputElement || presetElement instanceof HTMLSelectElement || presetElement instanceof HTMLTextAreaElement)
-                    && sm.utils.areLooselyEqualValue(presetElement.value, targetPreset));
+                const currentPreset = sm.getForgeNeoPresetValue();
+                const presetReady = currentPreset !== undefined
+                    && sm.utils.areLooselyEqualValue(currentPreset, targetPreset);
                 const controlsReady = requiredSelectors.every(selector => Boolean(document.querySelector(selector)));
                 if (presetReady && controlsReady) {
                     resolve();
@@ -3572,6 +3578,14 @@ declare let onAfterUiUpdate: (callback) => void;
             return undefined;
         }
         if (sm.isDomFallbackEntry(entry)) {
+            const componentValue = entry.component?.props?.value;
+            if (componentValue !== undefined) {
+                return componentValue;
+            }
+            const instanceContextValue = entry.component?.instance?.$$?.ctx?.[0];
+            if (instanceContextValue !== undefined) {
+                return instanceContextValue;
+            }
             const element = sm.findElementBySelectorOrFallback(entry.path, entry.selector);
             if (!element) {
                 return undefined;
@@ -3636,6 +3650,20 @@ declare let onAfterUiUpdate: (callback) => void;
             return;
         }
         if (sm.isDomFallbackEntry(entry)) {
+            if (entry.component?.props && entry.component?.instance?.$set) {
+                entry.component.props.value = value;
+                entry.component.instance.$set({ value: entry.component.props.value });
+                const componentElement = entry.element;
+                if (componentElement) {
+                    const inputEvent = new Event('input', { bubbles: true });
+                    Object.defineProperty(inputEvent, 'target', { value: componentElement });
+                    componentElement.dispatchEvent(inputEvent);
+                    const e = new Event('change', { bubbles: true });
+                    Object.defineProperty(e, 'target', { value: componentElement });
+                    componentElement.dispatchEvent(e);
+                }
+                return;
+            }
             const element = sm.findElementBySelectorOrFallback(entry.path, entry.selector);
             if (!element) {
                 console.warn(`[State Manager] Could not find element for ${entry.path} (tried explicit selector and ui-config fallback)`);
@@ -3658,6 +3686,11 @@ declare let onAfterUiUpdate: (callback) => void;
         }
         entry.component.props.value = value;
         entry.component.instance.$set({ value: entry.component.props.value });
+        if (entry.selector) {
+            const inputEvent = new Event('input', { bubbles: true });
+            Object.defineProperty(inputEvent, 'target', { value: entry.element });
+            entry.element.dispatchEvent(inputEvent);
+        }
         const e = new Event('change', { bubbles: true });
         Object.defineProperty(e, 'target', { value: entry.element });
         entry.element.dispatchEvent(e);
@@ -3709,11 +3742,28 @@ declare let onAfterUiUpdate: (callback) => void;
                 const basePath = pathParts.slice(0, pathParts.length - 1).join('/');
                 if (source == 'ui-config' || source == 'forge-neo-selector') {
                     if (!sm.componentMap.hasOwnProperty(basePath)) {
+                        let liveComponent = null;
+                        let liveElement = null;
+                        if (source == 'forge-neo-selector' && selector) {
+                            const selectorElement = document.querySelector(selector);
+                            let ownerElement = selectorElement;
+                            while (ownerElement) {
+                                const candidate = componentsByElemId.get(ownerElement.id);
+                                if (candidate?.instance?.$set && candidate?.props) {
+                                    liveComponent = candidate;
+                                    liveElement = app.getElementById(candidate.props.elem_id || `component-${candidate.id}`) || ownerElement;
+                                    break;
+                                }
+                                ownerElement = ownerElement.parentElement;
+                            }
+                        }
                         sm.componentMap[basePath] = {
                             entries: [{
                                     source: source,
                                     path: basePath,
-                                    selector: selector
+                                    selector: selector,
+                                    component: liveComponent,
+                                    element: liveElement
                                 }]
                         };
                     }
@@ -3728,7 +3778,8 @@ declare let onAfterUiUpdate: (callback) => void;
                             source: 'gradio',
                             path: basePath,
                             component: component,
-                            element: app.getElementById(component.props.elem_id || `component-${component.id}`)
+                            element: app.getElementById(component.props.elem_id || `component-${component.id}`),
+                            selector: selector
                         }]
                 };
                 // I really, REALLY dislike adding exception cases for specific extensions, but ControlNet's such a pivotal one...

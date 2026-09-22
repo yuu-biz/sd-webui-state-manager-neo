@@ -13,7 +13,7 @@ import modules.script_callbacks as script_callbacks
 from modules import shared, scripts
 
 sys.path.insert(0, os.path.dirname(__file__))
-from forge_neo_compat import FORGE_NEO_SELECTORS
+from forge_neo_compat import FORGE_NEO_CALLBACK_SETTINGS, FORGE_NEO_SELECTORS
 
 
 def is_forge_host() -> bool:
@@ -181,7 +181,7 @@ def state_manager_api(blocks: gr.Blocks, app: FastAPI):
                     "source": "forge-neo-selector",
                     "selector": selector,
                 }
-            elif isinstance(existing, dict) and existing.get("source") != "gradio":
+            elif isinstance(existing, dict):
                 existing.setdefault("selector", selector)
 
         # Log summary
@@ -273,6 +273,11 @@ def state_manager_api(blocks: gr.Blocks, app: FastAPI):
         settings = json.loads(settings_json.contents)
 
         for name, value in settings.items():
+            # Forge Neo owns these values through Gradio callbacks. Writing
+            # shared.opts first would make checkpoint/module callbacks see no
+            # change and skip the actual model reload.
+            if IS_FORGE and name in FORGE_NEO_CALLBACK_SETTINGS:
+                continue
             if hasattr(shared.opts, name):
                 if name == 'forge_additional_modules':
                     value = _forge_module_paths(value)
