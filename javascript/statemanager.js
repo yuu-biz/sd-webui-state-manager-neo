@@ -2875,6 +2875,8 @@
                     'Sampling Method': ['Sampling method'],
                     'Sampling steps': ['Sampling Steps'],
                     'Sampling Steps': ['Sampling steps'],
+                    'Schedule type': ['Schedule Type'],
+                    'Schedule Type': ['Schedule type'],
                     'Batch count': ['Batch Count'],
                     'Batch Count': ['Batch count'],
                     'Batch size': ['Batch Size'],
@@ -2983,6 +2985,11 @@
         generationSettingsContent.appendChild(createCompositeInspectorParameter("Size", valueMap => `${getDisplayValue(valueMap[getRootSettingName('Width')])} x ${getDisplayValue(valueMap[getRootSettingName('Height')])}`, [getRootSettingName('Width'), getRootSettingName('Height')]));
         generationSettingsContent.appendChild(createCompositeInspectorParameter("Batches", valueMap => `${getDisplayValue(valueMap[getRootSettingName('Batch count')])} x ${getDisplayValue(valueMap[getRootSettingName('Batch size')])}`, [getRootSettingName('Batch count'), getRootSettingName('Batch size')]));
         generationSettingsContent.appendChild(createGenerationInspectorParameter("CFG Scale", getRootSettingName('CFG Scale')));
+        const isForgeNeoConfig = entryQuickSettings.hasOwnProperty('forge_preset') || sm.forgeNeoSelectorMap?.hasOwnProperty('forge_preset/value');
+        const shiftSettingPath = getRootSettingName('Distilled CFG Scale');
+        if (isForgeNeoConfig && !isMissingPreviewValue(getSavedValue(shiftSettingPath))) {
+            generationSettingsContent.appendChild(createGenerationInspectorParameter("Shift", shiftSettingPath));
+        }
         generationSettingsContent.appendChild(createGenerationInspectorParameter("Seed", getScriptSettingName('seed', 'Seed')));
         generationSettingsContent.appendChild(createGenerationInspectorParameter("Use subseed", getScriptSettingName('seed', 'Extra')));
         const hasSubseed = getSavedValue(getScriptSettingName('seed', 'Extra'));
