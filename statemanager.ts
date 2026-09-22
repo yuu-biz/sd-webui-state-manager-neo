@@ -3139,6 +3139,84 @@ declare let onAfterUiUpdate: (callback) => void;
             }
         }
     };
+    sm.getForgeNeoSelectorForSetting = function (settingPath) {
+        const basePath = sm.utils.getSettingPathInfo(`${settingPath ?? ''}`).basePath;
+        const selectorMap = sm.forgeNeoSelectorMap || {};
+        const exactKeys = [`${basePath}/value`, basePath];
+        for (const key of exactKeys) {
+            if (selectorMap[key]) {
+                return selectorMap[key];
+            }
+        }
+        const normalizedBasePath = basePath.toLowerCase();
+        for (const key of Object.keys(selectorMap)) {
+            const keyBasePath = key.endsWith('/value') ? key.slice(0, -6) : key;
+            if (keyBasePath.toLowerCase() == normalizedBasePath) {
+                return selectorMap[key];
+            }
+        }
+        return undefined;
+    };
+    sm.getForgeNeoRequiredSelectors = function (componentSettings) {
+        const selectors = [];
+        for (const settingPath of Object.keys(componentSettings || {})) {
+            const selector = sm.getForgeNeoSelectorForSetting(settingPath);
+            if (selector && selectors.indexOf(selector) == -1) {
+                selectors.push(selector);
+            }
+        }
+        return selectors;
+    };
+    sm.getForgeNeoPresetValue = function () {
+        const presetSelector = sm.getForgeNeoSelectorForSetting('forge_preset');
+        if (presetSelector) {
+            const element = document.querySelector(presetSelector);
+            if (element instanceof HTMLInputElement || element instanceof HTMLSelectElement || element instanceof HTMLTextAreaElement) {
+                return element.value;
+            }
+        }
+        const presetPath = sm.resolveComponentPath('forge_preset');
+        const presetEntry = sm.componentMap[presetPath]?.entries?.[0];
+        return sm.getMappedComponentEntryValue(presetEntry);
+    };
+    sm.isForgeNeoPresetChange = function (quickSettings) {
+        if (!quickSettings || !quickSettings.hasOwnProperty('forge_preset')) {
+            return false;
+        }
+        if (!sm.getForgeNeoSelectorForSetting('forge_preset')) {
+            return false;
+        }
+        const currentPreset = sm.getForgeNeoPresetValue();
+        return currentPreset !== undefined && !sm.utils.areLooselyEqualValue(currentPreset, quickSettings.forge_preset);
+    };
+    sm.waitForForgeNeoPresetUpdate = function (targetPreset, componentSettings) {
+        const presetSelector = sm.getForgeNeoSelectorForSetting('forge_preset');
+        const requiredSelectors = sm.getForgeNeoRequiredSelectors(componentSettings);
+        if (!presetSelector || requiredSelectors.length == 0) {
+            return Promise.resolve();
+        }
+        return new Promise(resolve => {
+            const timeoutMs = 8000;
+            const startedAt = Date.now();
+            const check = () => {
+                const presetElement = document.querySelector(presetSelector);
+                const presetReady = Boolean(presetElement && (presetElement instanceof HTMLInputElement || presetElement instanceof HTMLSelectElement || presetElement instanceof HTMLTextAreaElement)
+                    && sm.utils.areLooselyEqualValue(presetElement.value, targetPreset));
+                const controlsReady = requiredSelectors.every(selector => Boolean(document.querySelector(selector)));
+                if (presetReady && controlsReady) {
+                    resolve();
+                    return;
+                }
+                if (Date.now() - startedAt >= timeoutMs) {
+                    console.warn('[State Manager] Timed out waiting for Forge Neo preset UI update; applying saved settings with the current component map.');
+                    resolve();
+                    return;
+                }
+                window.setTimeout(check, 50);
+            };
+            check();
+        });
+    };
     sm.applyQuickParameters = async function (values, ...filter) {
         if (!values || typeof values !== 'object') {
             values = {};
@@ -3991,14 +4069,31 @@ declare let onAfterUiUpdate: (callback) => void;
         })
             .catch(e => sm.utils.logResponseError("[State Manager] Getting save file name failed with error", e));
     };
-    sm.applyAll = function (state) {
+    sm.applyAll = async function (state) {
         if (!sm.canProceedWithApplyAction()) {
             return;
         }
         const quickSettings = (state.quickSettings && typeof state.quickSettings === 'object') ? state.quickSettings : {};
-        sm.applyQuickParameters(quickSettings); // The 4 mandatory ones always get saved, any other relevant ones will be in here. Easy!
         const savedComponentDefaults = sm.memoryStorage.savedDefaults[state.defaults];
-        let mergedComponentSettings = (state.componentSettings && typeof state.componentSettings === 'object') ? state.componentSettings : {};
+        const savedComponentSettings = (state.componentSettings && typeof state.componentSettings === 'object') ? state.componentSettings : {};
+        const forgeNeoWaitSettings = { ...(savedComponentDefaults || {}), ...savedComponentSettings };
+        if (sm.isForgeNeoPresetChange(quickSettings)) {
+            // Forge Neo rebuilds preset-specific controls asynchronously. Apply
+            // the preset first, wait for the saved controls to reappear, then
+            // rebuild the map before applying the remaining settings.
+            await sm.applyQuickParameters({ forge_preset: quickSettings.forge_preset });
+            await sm.waitForForgeNeoPresetUpdate(quickSettings.forge_preset, forgeNeoWaitSettings);
+            await sm.buildComponentMap();
+            const remainingQuickSettings = { ...quickSettings };
+            delete remainingQuickSettings.forge_preset;
+            if (Object.keys(remainingQuickSettings).length > 0) {
+                await sm.applyQuickParameters(remainingQuickSettings);
+            }
+        }
+        else {
+            await sm.applyQuickParameters(quickSettings);
+        }
+        let mergedComponentSettings = savedComponentSettings;
         // Add saved default value if it differs from the current UI
         for (const settingPath in savedComponentDefaults) {
             if (settingPath.indexOf(state.type) == -1) {
